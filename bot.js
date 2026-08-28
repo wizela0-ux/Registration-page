@@ -246,3 +246,6 @@ function handleViewResultStart(chatId) {
   userSessions[chatId] = { step: 'AWAITING_RESULT_FAIDA' };
   bot.sendMessage(chatId, '🔍 እባክዎን ለማረጋገጫ የ **ፋይዳ (Fayda FAN)** ቁጥርዎን ያስገቡ፡');
 }
+const http = require('http');
+const port = process.env.PORT || 3000;
+http.createServer((req, res) => res.end('Bot is active!')).listen(port);
