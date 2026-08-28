@@ -6,7 +6,7 @@ const { createClient } = require('@supabase/supabase-js');
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// User State Management
+// User Session State Management
 const userSessions = {};
 
 // -------------------------------------------------------------
@@ -32,11 +32,14 @@ bot.onText(/\/start/, (msg) => {
 });
 
 // -------------------------------------------------------------
-// B. MAIN BUTTON HANDLER
+// B. MAIN MESSAGE HANDLER
 // -------------------------------------------------------------
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
+
+  // ትዕዛዞችን (Commands) ማለፍ
+  if (text && text.startsWith('/')) return;
 
   if (text === '📝 ለማመዝገብ') {
     handleRegistrationStart(chatId);
@@ -51,10 +54,15 @@ bot.on('message', async (msg) => {
 // C. REGISTRATION FLOW
 // -------------------------------------------------------------
 async function handleRegistrationStart(chatId) {
-  const { data: config } = await supabase.from('settings').select('value').eq('key', 'is_registration_open').single();
+  // Check Registration Status from Supabase Settings Table
+  const { data: config, error } = await supabase
+    .from('settings')
+    .select('value')
+    .eq('key', 'is_registration_open')
+    .maybeSingle();
   
   if (config && config.value === 'false') {
-    return bot.sendMessage(chatId, '❌ የዘመኑ ምዝገባ ተጠናቋል/ተዘጋቷል! ለተጨማሪ መረጃ ትምህርት ቤቱን በአካል ያነጋግሩ።');
+    return bot.sendMessage(chatId, '❌ የዘመኑ ምዝገባ ተጠናቋል/ተዘጋቷል። ለተጨማሪ መረጃ ትምህርት ቤቱን በአካል ያነጋግሩ።');
   }
 
   userSessions[chatId] = { step: 'SELECT_GRADE', failCount: 0 };
@@ -71,16 +79,46 @@ async function handleRegistrationStart(chatId) {
   bot.sendMessage(chatId, '📚 እባክዎን መመዝገብ የሚፈልጉትን የክፍል ደረጃ ይምረጡ፡', gradeKeyboard);
 }
 
+// Inline Keyboard Callbacks
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
 
+  bot.answerCallbackQuery(query.id); // Remove loading spinner
+
+  if (!userSessions[chatId]) userSessions[chatId] = {};
+
+  // 1. Grade Selection
   if (data.startsWith('GRADE_')) {
-    const grade = data.split('_')[1];
-    userSessions[chatId].grade = parseInt(grade);
+    const grade = parseInt(data.split('_')[1]);
+    userSessions[chatId].grade = grade;
+
+    // 11ኛ እና 12ኛ ክፍል ከሆኑ የትምህርት ዘርፍ (Stream) ማስመረጥ
+    if (grade >= 11) {
+      userSessions[chatId].step = 'SELECT_STREAM';
+      const streamKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔬 Natural Science', callback_data: 'STREAM_Natural Science' }],
+            [{ text: '📖 Social Science', callback_data: 'STREAM_Social Science' }]
+          ]
+        }
+      };
+      return bot.sendMessage(chatId, '🧭 እባክዎን የትምህርት ዘርፍዎን (Stream) ይምረጡ፡', streamKeyboard);
+    } else {
+      userSessions[chatId].stream = null;
+      userSessions[chatId].step = 'AWAITING_CARD_PHOTO';
+      return bot.sendMessage(chatId, `✅ የ ${grade}ኛ ክፍል ተመርጧል።\n\n📸 እባክዎን የባለፈው ዓመት የትምህርት **ሪፖርት ካርድዎን** ጥራት ያለው ፎቶ ይላኩ፡`);
+    }
+  }
+
+  // 2. Stream Selection
+  if (data.startsWith('STREAM_')) {
+    const stream = data.replace('STREAM_', '');
+    userSessions[chatId].stream = stream;
     userSessions[chatId].step = 'AWAITING_CARD_PHOTO';
 
-    bot.sendMessage(chatId, `✅ የ ${grade}ኛ ክፍል ተመርጧል።\n\n📸 እባክዎን የባለፈው ዓመት የትምህርት **ሪፖርት ካርድዎን** ጥራት ያለው ፎቶ ይላኩ፡`);
+    return bot.sendMessage(chatId, `✅ ዘርፍ፡ **${stream}** ተመርጧል።\n\n📸 እባክዎን የባለፈው ዓመት የትምህርት **ሪፖርት ካርድዎን** ጥራት ያለው ፎቶ ይላኩ፡`, { parse_mode: 'Markdown' });
   }
 });
 
@@ -91,20 +129,29 @@ async function handleUserSteps(chatId, msg) {
   const session = userSessions[chatId];
   if (!session || !session.step) return;
 
-  // 1. CARD PHOTO & OCR VERIFICATION
-  if (session.step === 'AWAITING_CARD_PHOTO' && msg.photo) {
+  // 1. REPORT CARD PHOTO
+  if (session.step === 'AWAITING_CARD_PHOTO') {
+    if (!msg.photo) {
+      return bot.sendMessage(chatId, '⚠️ እባክዎን የካርድዎን ፎቶ (Image File) ብቻ ይላኩ።');
+    }
+
     bot.sendMessage(chatId, '🔍 ካርዱ እየተፈተሸ ነው... እባክዎን ትንሽ ይጠብቁ።');
     
+    // Save Photo URL from Telegram
+    const photoId = msg.photo[msg.photo.length - 1].file_id;
+    const photoUrl = await bot.getFileLink(photoId);
+    session.card_photo_url = photoUrl;
+
     const isPassed = true; 
     const avgScore = 65.5; 
 
     if (!isPassed || avgScore <= 50) {
       session.failCount = (session.failCount || 0) + 1;
       if (session.failCount >= 3) {
-        userSessions[chatId] = {};
+        delete userSessions[chatId];
         return bot.sendMessage(chatId, '⚠️ ካርዱን ማረጋገጥ አልተቻለም (3 ጊዜ ተሞክሯል)።\nእባክዎን አስፈላጊውን ሰነድ ይዘው በትምህርት ቤቱ በአካል በመገኘት ይመዝገቡ።');
       }
-      return bot.sendMessage(chatId, `❌ የቀረበው ካርድ መስፈርቱን አላሟላም (Passed መሆን እና Average > 50 መሆን አለበት)። እባክዎን እንደገና ይሞክሩ (ቀሪ ሙከራ፡ ${3 - session.failCount})።`);
+      return bot.sendMessage(chatId, `❌ የቀረበው ካርድ መስፈርቱን አላሟላም። እባክዎን እንደገና ይሞክሩ (ቀሪ ሙከራ፡ ${3 - session.failCount})።`);
     }
 
     session.average_score = avgScore;
@@ -113,7 +160,14 @@ async function handleUserSteps(chatId, msg) {
   }
 
   // 2. NATIONAL ID PHOTO
-  if (session.step === 'AWAITING_ID_PHOTO' && msg.photo) {
+  if (session.step === 'AWAITING_ID_PHOTO') {
+    if (!msg.photo) {
+      return bot.sendMessage(chatId, '⚠️ እባክዎን የመታወቂያዎን ፎቶ ብቻ ይላኩ።');
+    }
+
+    const photoId = msg.photo[msg.photo.length - 1].file_id;
+    session.faida_photo_url = await bot.getFileLink(photoId);
+
     session.step = 'AWAITING_FAIDA';
     return bot.sendMessage(chatId, '✅ መታወቂያው ተቀብለናል።\n\n🆔 እባክዎን የ **ፋይዳ (Fayda FAN)** ቁጥርዎን ያስገቡ፡');
   }
@@ -155,43 +209,64 @@ async function handleUserSteps(chatId, msg) {
       `እባክዎን የምዝገባ ክፍያ **500 ብር** በሚከተለው የባንክ ሂሳብ ገቢ ያድርጉ፡\n` +
       `🏦 **ኢትዮጵያ ንግድ ባንክ:** 1000XXXXXXXXX\n` +
       `👤 **ስም:** XXX School\n\n` +
-      `⏱️ **ማሳሰቢያ:** ክፍያውን ፈጽመው የስክሪንሹት ፎቶ እና የትራንዛክሽን ቁጥር በ **20 ደቂቃ** ውስጥ ይላኩ።`;
+      `⏱️ **ማሳሰቢያ:** ክፍያውን ፈጽመው የስክሪንሹት ፎቶ በ **20 ደቂቃ** ውስጥ ይላኩ።`;
 
     bot.sendMessage(chatId, paymentInfo, { parse_mode: 'Markdown' });
 
-    setTimeout(() => {
+    // 20 Minute Expiry Timeout
+    session.paymentTimer = setTimeout(() => {
       if (userSessions[chatId] && userSessions[chatId].step === 'AWAITING_PAYMENT_SCREENSHOT') {
-        bot.sendMessage(chatId, '⏰ የ 20 ደቂቃ የክፍያ ማረጋገጫ ጊዜ አልፏል። እባክዎን ምዝገባውን ከ አዲስ ይጀምሩ።');
+        bot.sendMessage(chatId, '⏰ የ 20 ደቂቃ የክፍያ ማረጋገጫ ጊዜ አልፏል። እባክዎን ምዝገባውን ከአዲስ ይጀምሩ።');
         delete userSessions[chatId];
       }
     }, 20 * 60 * 1000);
     return;
   }
 
-  // 8. PAYMENT SCREENSHOT & TXN
+  // 8. PAYMENT SCREENSHOT & SUPABASE INSERTION
   if (session.step === 'AWAITING_PAYMENT_SCREENSHOT') {
-    if (msg.photo || msg.text) {
-      const { data: newStudent, error } = await supabase.from('students').insert([
+    if (!msg.photo) {
+      return bot.sendMessage(chatId, '⚠️ እባክዎን የደረሰኙን የስክሪንሹት ፎቶ ብቻ ይላኩ።');
+    }
+
+    // Clear Timeout
+    if (session.paymentTimer) clearTimeout(session.paymentTimer);
+
+    const photoId = msg.photo[msg.photo.length - 1].file_id;
+    const receiptUrl = await bot.getFileLink(photoId);
+
+    // Save Student Data into Supabase
+    const { data: newStudent, error } = await supabase
+      .from('students')
+      .insert([
         {
           telegram_id: msg.from.id,
-          full_name: session.full_name,
+          full_name: `${session.full_name} ${session.father_name}`,
           father_name: session.father_name,
           mother_name: session.mother_name,
           faida_number: session.faida_number,
           mother_phone: session.mother_phone,
           grade_level: session.grade,
+          stream: session.stream,
           average_score: session.average_score,
+          card_photo_url: session.card_photo_url,
+          faida_photo_url: session.faida_photo_url,
+          receipt_photo_url: receiptUrl,
+          status: 'pending',
+          payment_status: 'pending',
           is_registered: true
         }
-      ]).select().single();
+      ])
+      .select()
+      .single();
 
-      if (error) {
-        return bot.sendMessage(chatId, '❌ መረጃውን ሲመዘገብ ስህተት አጋጥሟል። እባክዎን የፋይዳ ቁጥርዎት ቀደም ብሎ ያልተመዘገበ መሆኑን ያረጋግጡ።');
-      }
-
-      bot.sendMessage(chatId, '🎉 **ምዝገባዎ በስኬት ተጠናቋል!**\n\nክፍያው ተረጋግጦ ክፍሎች ሲመደቡ ማሳወቂያ ይደርስዎታል።');
-      delete userSessions[chatId];
+    if (error) {
+      console.error('Supabase Insert Error:', error);
+      return bot.sendMessage(chatId, '❌ መረጃውን ሲመዘገብ ስህተት አጋጥሟል። እባክዎን የፋይዳ ቁጥርዎት ቀደም ብሎ ያልተመዘገበ መሆኑን ያረጋግጡ።');
     }
+
+    bot.sendMessage(chatId, '🎉 **ምዝገባዎ በስኬት ተጠናቋል!**\n\nክፍያው በአድሚን ተረጋግጦ ክፍሎች ሲመደቡ ማሳወቂያ ይደርስዎታል።');
+    delete userSessions[chatId];
   }
 
   // -------------------------------------------------------------
@@ -204,7 +279,7 @@ async function handleUserSteps(chatId, msg) {
       .from('students')
       .select('*')
       .eq('faida_number', inputFaida)
-      .single();
+      .maybeSingle();
 
     if (error || !student) {
       return bot.sendMessage(chatId, '❌ የቀረበው የፋይዳ ቁጥር አልተገኘም። እባክዎን ቁጥሩን አስተካክለው እንደገና ይሞክሩ።');
@@ -221,14 +296,14 @@ async function handleUserSteps(chatId, msg) {
       return bot.sendMessage(chatId, `👋 ሰላም **${student.full_name}**!\n\n⚠️ የ ${student.grade_level}ኛ ክፍል ውጤት ገና በአድሚን አልተለቀቀም። እባክዎን በትዕግስት ይቆዩ።`, { parse_mode: 'Markdown' });
     }
 
-    let resMsg = `👤 **ተማሪ:** ${student.full_name} ${student.father_name}\n`;
+    let resMsg = `👤 **ተማሪ:** ${student.full_name}\n`;
     resMsg += `🏫 **ክፍል:** ${student.grade_level}${student.section || ' (ያልተመደበ)'}\n`;
     resMsg += `🆔 **የፋይዳ ቁጥር:** ${student.faida_number}\n`;
     resMsg += `-----------------------------------\n`;
 
     let total = 0;
     results.forEach(r => {
-      resMsg += `🔹 **${r.subjects.subject_name}:** ${r.score}\n`;
+      resMsg += `🔹 **${r.subjects?.subject_name || 'ትምህርት'}:** ${r.score}\n`;
       total += r.score;
     });
 
@@ -246,6 +321,8 @@ function handleViewResultStart(chatId) {
   userSessions[chatId] = { step: 'AWAITING_RESULT_FAIDA' };
   bot.sendMessage(chatId, '🔍 እባክዎን ለማረጋገጫ የ **ፋይዳ (Fayda FAN)** ቁጥርዎን ያስገቡ፡');
 }
+
+// HTTP Server for Keep-Alive
 const http = require('http');
 const port = process.env.PORT || 3000;
 http.createServer((req, res) => res.end('Bot is active!')).listen(port);
