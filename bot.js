@@ -2,7 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 
-// 1. configuration with provided credentials
+// 1. Configuration & Credentials
 const BOT_TOKEN = '8834730895:AAFgHSWgfXicGylgw6OO5oyPnZtPBVK4RLo';
 const SUPABASE_URL = 'https://jiqbhuxbxxrzstleitkd.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImppcWJodXhieHhyenN0bGVpdGtkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4OTY0NDQsImV4cCI6MjEwMzQ3MjQ0NH0._0BAVpBDoUiRz9INRVNS327Ubgeo0Pq6IAughD4AFmg';
@@ -13,7 +13,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const userSessions = {};
 
-// Helper: ፎቶዎችን ወደ Supabase Storage መጫኛ function
+// Helper: ፎቶዎችን ወደ Supabase Storage መጫኛ Function
 async function uploadTelegramPhotoToSupabase(fileId, pathName) {
   try {
     const fileLink = await bot.getFileLink(fileId);
@@ -26,7 +26,7 @@ async function uploadTelegramPhotoToSupabase(fileId, pathName) {
       .upload(fileName, buffer, { contentType: 'image/jpeg', upsert: true });
 
     if (error) {
-      console.error('Supabase Storage Error:', error);
+      console.error('Storage Upload Error:', error);
       throw error;
     }
 
@@ -36,7 +36,7 @@ async function uploadTelegramPhotoToSupabase(fileId, pathName) {
 
     return publicUrlData.publicUrl;
   } catch (err) {
-    console.error('Storage Upload Exception:', err.message);
+    console.error('Storage Exception:', err.message);
     return null;
   }
 }
@@ -103,12 +103,12 @@ async function handleUserSteps(chatId, msg) {
   const session = userSessions[chatId];
   if (!session || !session.step) return;
 
-  // Delete User Message to keep chat super clean
+  // Delete User Message to keep chat clean
   try { await bot.deleteMessage(chatId, msg.message_id); } catch(e){}
 
   const msgId = session.mainMessageId;
 
-  // RESULT CHECKING STEP
+  // 1. RESULT CHECKING HANDLER
   if (session.step === 'AWAITING_RESULT_FAIDA' && msg.text) {
     const inputFaida = msg.text.trim();
     
@@ -125,10 +125,10 @@ async function handleUserSteps(chatId, msg) {
 
     if (student.status !== 'approved') {
       delete userSessions[chatId];
-      return bot.sendMessage(chatId, `ℹ️ የፋይዳ ቁጥር፡ ${inputFaida}\nየማመልከቻዎ ሁኔታ፡ **${student.status.toUpperCase()}**\n\nውጤት የሚለቀቀው ምዝገባዎ ሲጸድቅ ብቻ ነው።`);
+      return bot.sendMessage(chatId, `ℹ️ የፋይዳ ቁጥር፦ ${inputFaida}\nየማመልከቻዎ ሁኔታ፦ **${student.status.toUpperCase()}**\n\nውጤት የሚለቀቀው ምዝገባዎ ሲጸድቅ ብቻ ነው።`);
     }
 
-    // Fetch grades if published
+    // Fetch grades
     const { data: results } = await supabase
       .from('results')
       .select('score, subjects(subject_name)')
@@ -138,22 +138,22 @@ async function handleUserSteps(chatId, msg) {
     delete userSessions[chatId];
 
     if (!results || results.length === 0) {
-      return bot.sendMessage(chatId, `👤 ተማሪ፡ **${student.full_name}**\n📚 ክፍል፡ **${student.grade_level}ኛ**\n\n⚠️ የዚህ ክፍለ-ጊዜ ውጤት እስካሁን አልተለቀቀም።`);
+      return bot.sendMessage(chatId, `👤 ተማሪ፦ **${student.full_name}**\n📚 ክፍል፦ **${student.grade_level}ኛ**\n\n⚠️ የዚህ ክፍለ-ጊዜ ውጤት እስካሁን አልተለቀቀም።`);
     }
 
-    let resultText = `📊 **የውጤት መግለጫ**\n👤 ተማሪ፡ **${student.full_name}**\n📚 ክፍል፡ **${student.grade_level}ኛ**\n-------------------\n`;
+    let resultText = `📊 **የውጤት መግለጫ**\n👤 ተማሪ፦ **${student.full_name}**\n📚 ክፍል፦ **${student.grade_level}ኛ**\n-------------------\n`;
     let total = 0;
     results.forEach(r => {
       resultText += `• ${r.subjects?.subject_name || 'ትምህርት'}: **${r.score}**\n`;
       total += Number(r.score);
     });
     const avg = (total / results.length).toFixed(1);
-    resultText += `-------------------\n📈 **አማካይ ውጤት (Average): ${avg}**`;
+    resultText += `-------------------\n📈 **አማካይ ውጤት (Average)፦ ${avg}**`;
 
     return bot.sendMessage(chatId, resultText, { parse_mode: 'Markdown' });
   }
 
-  // 1. FAYDA NUMBER CHECK (Validation)
+  // 2. FAYDA NUMBER CHECKING
   if (session.step === 'AWAITING_FAIDA_FIRST' && msg.text) {
     const inputFaida = msg.text.trim();
 
@@ -198,23 +198,23 @@ async function handleUserSteps(chatId, msg) {
     });
   }
 
-  // TEXT INPUTS (Names & Phone)
+  // 3. TEXT INPUTS
   if (session.step === 'AWAITING_FULL_NAME' && msg.text) {
     session.full_name = msg.text.trim();
     session.step = 'AWAITING_FATHER_NAME';
-    return bot.editMessageText(`👤 የተማሪ ስም፡ **${session.full_name}**\n\n👨 **የአባት ሙሉ ስም** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return bot.editMessageText(`👤 የተማሪ ስም፦ **${session.full_name}**\n\n👨 **የአባት ሙሉ ስም** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
   }
 
   if (session.step === 'AWAITING_FATHER_NAME' && msg.text) {
     session.father_name = msg.text.trim();
     session.step = 'AWAITING_MOTHER_NAME';
-    return bot.editMessageText(`👨 የአባት ስም፡ **${session.father_name}**\n\n👩 **የእናት ሙሉ ስም** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return bot.editMessageText(`👨 የአባት ስም፦ **${session.father_name}**\n\n👩 **የእናት ሙሉ ስም** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
   }
 
   if (session.step === 'AWAITING_MOTHER_NAME' && msg.text) {
     session.mother_name = msg.text.trim();
     session.step = 'AWAITING_MOTHER_PHONE';
-    return bot.editMessageText(`👩 የእናት ስም፡ **${session.mother_name}**\n\n📞 **የእናት የስልክ ቁጥር** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return bot.editMessageText(`👩 የእናት ስም፦ **${session.mother_name}**\n\n📞 **የእናት የስልክ ቁጥር** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
   }
 
   if (session.step === 'AWAITING_MOTHER_PHONE' && msg.text) {
@@ -223,7 +223,7 @@ async function handleUserSteps(chatId, msg) {
     return bot.editMessageText(`✅ የስልክ ቁጥር ተመዝግቧል።\n\n📸 **ደረጃ 4/6፦** እባክዎን የባለፈው ዓመት የትምህርት **ሪፖርት ካርድዎን** ጥራት ያለው ፎቶ ይላኩ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
   }
 
-  // PHOTO UPLOADS WITH ANIMATION STATUS
+  // 4. PHOTO UPLOADS
   if (session.step === 'AWAITING_CARD_PHOTO' && msg.photo) {
     await bot.editMessageText('🔍 ሰነዱ እየተፈተሸ ነው... እባክዎን ይቆዩ።', { chat_id: chatId, message_id: msgId });
     
@@ -258,7 +258,7 @@ async function handleUserSteps(chatId, msg) {
     // Insert to Supabase Database
     const { error } = await supabase.from('students').insert([{
       telegram_id: msg.from.id,
-      full_name: `${session.full_name} ${session.father_name}`,
+      full_name: session.full_name,
       father_name: session.father_name,
       mother_name: session.mother_name,
       faida_number: session.faida_number,
@@ -274,7 +274,7 @@ async function handleUserSteps(chatId, msg) {
 
     if (error) {
       console.error('Database Insert Detailed Error:', error);
-      return bot.editMessageText(`❌ መረጃውን ሲመዘገብ ስህተት አጋጥሟል፦ ${error.message}`, { chat_id: chatId, message_id: msgId });
+      return bot.editMessageText('❌ መረጃውን ሲመዘገብ ስህተት አጋጥሟል። እባክዎን እንደገና ይሞክሩ።', { chat_id: chatId, message_id: msgId });
     }
 
     bot.editMessageText('🎉 **ምዝገባዎ በስኬት ተጠናቋል!**\n\nማመልከቻዎ በአድሚን ተገምግሞ ሲጸድቅ ማሳወቂያ ይደርስዎታል።', { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
@@ -310,14 +310,14 @@ bot.on('callback_query', async (query) => {
     } else {
       session.stream = null;
       session.step = 'AWAITING_FULL_NAME';
-      return bot.editMessageText(`✅ ${grade}ኛ ክፍል ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ሙሉ ስም** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+      return bot.editMessageText(`✅ ${grade}ኛ ክፍል ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
     }
   }
 
   if (data.startsWith('STREAM_')) {
     session.stream = data.replace('STREAM_', '');
     session.step = 'AWAITING_FULL_NAME';
-    return bot.editMessageText(`✅ ዘርፍ፡ **${session.stream}** ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ሙሉ ስም** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return bot.editMessageText(`✅ ዘርፍ፦ **${session.stream}** ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
   }
 
   if (data === 'EDIT_FAIDA') {
@@ -327,7 +327,7 @@ bot.on('callback_query', async (query) => {
 
   if (data === 'EDIT_NAME') {
     session.step = 'AWAITING_FULL_NAME';
-    return bot.editMessageText('👤 አዲስ **የተማሪ ሙሉ ስም** ያስገቡ፡', { chat_id: chatId, message_id: msgId });
+    return bot.editMessageText('👤 አዲስ **የተማሪ ስም** ያስገቡ፡', { chat_id: chatId, message_id: msgId });
   }
 
   if (data === 'CONFIRM_GO_TO_PAYMENT') {
@@ -348,11 +348,11 @@ function showSummaryAndReviewScreen(chatId) {
   session.step = 'REVIEW_SUMMARY';
 
   let summaryText = `📋 **የማመልከቻዎ ማጠቃለያ**\n\n` +
-    `👤 **ስም:** ${session.full_name} ${session.father_name}\n` +
-    `🆔 **ፋይዳ ቁጥር:** ${session.faida_number}\n` +
-    `📚 **ክፍል:** ${session.grade}ኛ ${session.stream ? `(${session.stream})` : ''}\n` +
-    `👩 **የእናት ስም:** ${session.mother_name}\n` +
-    `📞 **ስልክ:** ${session.mother_phone}\n\n` +
+    `👤 **ስም፦** ${session.full_name} ${session.father_name}\n` +
+    `🆔 **ፋይዳ ቁጥር፦** ${session.faida_number}\n` +
+    `📚 **ክፍል፦** ${session.grade}ኛ ${session.stream ? `(${session.stream})` : ''}\n` +
+    `👩 **የእናት ስም፦** ${session.mother_name}\n` +
+    `📞 **ስልክ፦** ${session.mother_phone}\n\n` +
     `እባክዎን መረጃዎቹ ትክክል መሆናቸውን ያረጋግጡ። ለማስተካከል የሚፈልጉት ካለ ከታች ያሉትን ቁልፎች ይጠቀሙ፦`;
 
   const reviewButtons = {
@@ -371,14 +371,12 @@ function showSummaryAndReviewScreen(chatId) {
   });
 }
 
-// -------------------------------------------------------------
-// F. RESULT CHECKING LOGIC
-// -------------------------------------------------------------
+// RESULT CHECKING INITIATION
 function handleViewResultStart(chatId) {
   userSessions[chatId] = { step: 'AWAITING_RESULT_FAIDA' };
   bot.sendMessage(chatId, '🔍 እባክዎን ለማረጋገጫ የ **ፋይዳ (Fayda FAN)** ቁጥርዎን ያስገቡ፡');
 }
 
-// HTTP Express Server for Server Hosting
+// HTTP Server for Render Hosting
 const http = require('http');
 http.createServer((req, res) => res.end('School Registration Bot Running!')).listen(process.env.PORT || 3000);
