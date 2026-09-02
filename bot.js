@@ -25,7 +25,10 @@ async function uploadTelegramPhotoToSupabase(fileId, pathName) {
       .from(BUCKET_NAME)
       .upload(fileName, buffer, { contentType: 'image/jpeg', upsert: true });
 
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase Storage Error:', error);
+      throw error;
+    }
 
     const { data: publicUrlData } = supabase.storage
       .from(BUCKET_NAME)
@@ -33,7 +36,7 @@ async function uploadTelegramPhotoToSupabase(fileId, pathName) {
 
     return publicUrlData.publicUrl;
   } catch (err) {
-    console.error('Storage Upload Error:', err);
+    console.error('Storage Upload Exception:', err.message);
     return null;
   }
 }
@@ -74,10 +77,9 @@ bot.on('message', async (msg) => {
 });
 
 // -------------------------------------------------------------
-// C. REGISTRATION INITIATION & LEVEL SELECTION
+// C. REGISTRATION INITIATION
 // -------------------------------------------------------------
 async function handleRegistrationStart(chatId) {
-  // Check System Status
   const { data: config } = await supabase
     .from('settings')
     .select('value')
@@ -106,11 +108,55 @@ async function handleUserSteps(chatId, msg) {
 
   const msgId = session.mainMessageId;
 
-  // 1. FAYDA NUMBER CHECK (With 3-reject limit validation)
+  // RESULT CHECKING STEP
+  if (session.step === 'AWAITING_RESULT_FAIDA' && msg.text) {
+    const inputFaida = msg.text.trim();
+    
+    const { data: student, error } = await supabase
+      .from('students')
+      .select('*')
+      .eq('faida_number', inputFaida)
+      .maybeSingle();
+
+    if (error || !student) {
+      delete userSessions[chatId];
+      return bot.sendMessage(chatId, '❌ የገባው የፋይዳ ቁጥር አልተገኘም። እባክዎን ቁጥሩን አረጋግጠው ድጋሚ ይሞክሩ።');
+    }
+
+    if (student.status !== 'approved') {
+      delete userSessions[chatId];
+      return bot.sendMessage(chatId, `ℹ️ የፋይዳ ቁጥር፡ ${inputFaida}\nየማመልከቻዎ ሁኔታ፡ **${student.status.toUpperCase()}**\n\nውጤት የሚለቀቀው ምዝገባዎ ሲጸድቅ ብቻ ነው።`);
+    }
+
+    // Fetch grades if published
+    const { data: results } = await supabase
+      .from('results')
+      .select('score, subjects(subject_name)')
+      .eq('student_id', student.id)
+      .eq('is_published', true);
+
+    delete userSessions[chatId];
+
+    if (!results || results.length === 0) {
+      return bot.sendMessage(chatId, `👤 ተማሪ፡ **${student.full_name}**\n📚 ክፍል፡ **${student.grade_level}ኛ**\n\n⚠️ የዚህ ክፍለ-ጊዜ ውጤት እስካሁን አልተለቀቀም።`);
+    }
+
+    let resultText = `📊 **የውጤት መግለጫ**\n👤 ተማሪ፡ **${student.full_name}**\n📚 ክፍል፡ **${student.grade_level}ኛ**\n-------------------\n`;
+    let total = 0;
+    results.forEach(r => {
+      resultText += `• ${r.subjects?.subject_name || 'ትምህርት'}: **${r.score}**\n`;
+      total += Number(r.score);
+    });
+    const avg = (total / results.length).toFixed(1);
+    resultText += `-------------------\n📈 **አማካይ ውጤት (Average): ${avg}**`;
+
+    return bot.sendMessage(chatId, resultText, { parse_mode: 'Markdown' });
+  }
+
+  // 1. FAYDA NUMBER CHECK (Validation)
   if (session.step === 'AWAITING_FAIDA_FIRST' && msg.text) {
     const inputFaida = msg.text.trim();
 
-    // Check existing rejects count
     const { data: existingRecords } = await supabase
       .from('students')
       .select('status')
@@ -118,10 +164,16 @@ async function handleUserSteps(chatId, msg) {
 
     const rejectedCount = existingRecords ? existingRecords.filter(r => r.status === 'rejected').length : 0;
     const hasApproved = existingRecords ? existingRecords.some(r => r.status === 'approved') : false;
+    const hasPending = existingRecords ? existingRecords.some(r => r.status === 'pending') : false;
 
     if (hasApproved) {
       delete userSessions[chatId];
       return bot.editMessageText('✅ ይህ የፋይዳ ቁጥር አስቀድሞ በስኬት ተመዝግቧል። ውጤት ለማየት የመነሻ ገጽን ይጠቀሙ።', { chat_id: chatId, message_id: msgId });
+    }
+
+    if (hasPending) {
+      delete userSessions[chatId];
+      return bot.editMessageText('⏳ ይህ የፋይዳ ቁጥር አስቀድሞ ማመልከቻ ያስገባ ሲሆን በአሁኑ ወቅት በግምገማ (Pending) ላይ ይገኛል። እባክዎን አድሚኑ እስኪያጸድቀው ይታገሱ።', { chat_id: chatId, message_id: msgId });
     }
 
     if (rejectedCount >= 3) {
@@ -194,7 +246,6 @@ async function handleUserSteps(chatId, msg) {
     const url = await uploadTelegramPhotoToSupabase(fileId, `faida_${session.faida_number}`);
     session.faida_photo_url = url;
 
-    // Proceed to Summary Edit Screen
     return showSummaryAndReviewScreen(chatId);
   }
 
@@ -213,7 +264,7 @@ async function handleUserSteps(chatId, msg) {
       faida_number: session.faida_number,
       mother_phone: session.mother_phone,
       grade_level: session.grade,
-      stream: session.stream,
+      stream: session.stream || null,
       card_photo_url: session.card_photo_url,
       faida_photo_url: session.faida_photo_url,
       receipt_photo_url: receiptUrl,
@@ -222,8 +273,8 @@ async function handleUserSteps(chatId, msg) {
     }]);
 
     if (error) {
-      console.error(error);
-      return bot.editMessageText('❌ መረጃውን ሲመዘገብ ስህተት አጋጥሟል። እባክዎን እንደገና ይሞክሩ።', { chat_id: chatId, message_id: msgId });
+      console.error('Database Insert Detailed Error:', error);
+      return bot.editMessageText(`❌ መረጃውን ሲመዘገብ ስህተት አጋጥሟል፦ ${error.message}`, { chat_id: chatId, message_id: msgId });
     }
 
     bot.editMessageText('🎉 **ምዝገባዎ በስኬት ተጠናቋል!**\n\nማመልከቻዎ በአድሚን ተገምግሞ ሲጸድቅ ማሳወቂያ ይደርስዎታል።', { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
@@ -232,7 +283,7 @@ async function handleUserSteps(chatId, msg) {
 }
 
 // -------------------------------------------------------------
-// E. CALLBACK BUTTON HANDLERS (Grades, Streams, Edit Actions)
+// E. CALLBACK BUTTON HANDLERS
 // -------------------------------------------------------------
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
@@ -269,7 +320,6 @@ bot.on('callback_query', async (query) => {
     return bot.editMessageText(`✅ ዘርፍ፡ **${session.stream}** ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ሙሉ ስም** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
   }
 
-  // SUMMARY EDIT BUTTON HANDLERS
   if (data === 'EDIT_FAIDA') {
     session.step = 'AWAITING_FAIDA_FIRST';
     return bot.editMessageText('🆔 አዲስ **ፋይዳ ቁጥር** ያስገቡ፡', { chat_id: chatId, message_id: msgId });
