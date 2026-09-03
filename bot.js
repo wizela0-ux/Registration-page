@@ -13,6 +13,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const userSessions = {};
 
+// የ Polling ስህተት ቦቱን እንዳይዘገው መያዣ
+bot.on('polling_error', (error) => {
+  console.error('Telegram Polling Error:', error.code || error.message);
+});
+
 // Safe Edit Message Helper
 async function safeEditMessage(chatId, messageId, text, options = {}) {
   try {
@@ -26,7 +31,10 @@ async function safeEditMessage(chatId, messageId, text, options = {}) {
 async function uploadTelegramPhotoToSupabase(fileId, pathName) {
   try {
     const fileLink = await bot.getFileLink(fileId);
-    const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+    const response = await axios.get(fileLink, { 
+      responseType: 'arraybuffer',
+      timeout: 15000 // 15 ሰከንድ ታይምአውት
+    });
     const buffer = Buffer.from(response.data, 'binary');
 
     const fileName = `${pathName}_${Date.now()}.jpg`;
@@ -55,7 +63,7 @@ async function uploadTelegramPhotoToSupabase(fileId, pathName) {
 // -------------------------------------------------------------
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  userSessions[chatId] = { step: 'IDLE' };
+  userSessions[chatId] = { step: 'IDLE', updatedAt: Date.now() };
 
   const welcomeText = `👋 ሰላም ${msg.from.first_name}!\nእንኳን ወደ ትምህርት ቤታችን ኦፊሴላዊ ቦት በደህና መጡ።\n\nእባክዎን ከታች ካሉት አማራጮች አንዱን ይምረጡ፡`;
 
@@ -99,9 +107,9 @@ async function handleRegistrationStart(chatId) {
     return bot.sendMessage(chatId, '❌ የዘመኑ ምዝገባ ተጠናቋል/ተዘጋቷል። ለተጨማሪ መረጃ ትምህርት ቤቱን በአካል ያነጋግሩ።');
   }
 
-  userSessions[chatId] = { step: 'AWAITING_FAIDA_FIRST' };
+  userSessions[chatId] = { step: 'AWAITING_FAIDA_FIRST', updatedAt: Date.now() };
 
-  const sent = await bot.sendMessage(chatId, '🆔 **ደረጃ 1/6፦** እባክዎን የ **ፋይዳ (Fayda FAN)** ቁጥርዎን ያስገቡ፡', { parse_mode: 'Markdown' });
+  const sent = await bot.sendMessage(chatId, '🆔 **ደረጃ 1/7፦** እባክዎን የ **ፋይዳ (Fayda FAN)** ቁጥርዎን ያስገቡ፡', { parse_mode: 'Markdown' });
   userSessions[chatId].mainMessageId = sent.message_id;
 }
 
@@ -112,6 +120,7 @@ async function handleUserSteps(chatId, msg) {
   const session = userSessions[chatId];
   if (!session || !session.step) return;
 
+  session.updatedAt = Date.now();
   try { await bot.deleteMessage(chatId, msg.message_id); } catch(e){}
 
   const msgId = session.mainMessageId;
@@ -198,7 +207,7 @@ async function handleUserSteps(chatId, msg) {
       ]
     };
 
-    return safeEditMessage(chatId, msgId, `✅ የፋይዳ ቁጥር (${inputFaida}) ተመዝግቧል።\n\n📚 **ደረጃ 2/6፦** እባክዎን መመዝገብ የሚፈልጉትን ክፍል ይምረጡ፡`, { reply_markup: gradeKeyboard });
+    return safeEditMessage(chatId, msgId, `✅ የፋይዳ ቁጥር (${inputFaida}) ተመዝግቧል።\n\n📚 **ደረጃ 2/7፦** እባክዎን መመዝገብ የሚፈልጉትን ክፍል ይምረጡ፡`, { reply_markup: gradeKeyboard });
   }
 
   // 3. TEXT INPUTS
@@ -223,10 +232,10 @@ async function handleUserSteps(chatId, msg) {
   if (session.step === 'AWAITING_MOTHER_PHONE' && msg.text) {
     session.mother_phone = msg.text.trim();
     session.step = 'AWAITING_CARD_PHOTO';
-    return safeEditMessage(chatId, msgId, `✅ የስልክ ቁጥር ተመዝግቧል።\n\n📸 **ደረጃ 4/6፦** እባክዎን የባለፈው ዓመት የትምህርት **ሪፖርት ካርድዎን** ጥራት ያለው ፎቶ ይላኩ፡`, { parse_mode: 'Markdown' });
+    return safeEditMessage(chatId, msgId, `✅ የስልክ ቁጥር ተመዝግቧል።\n\n📸 **ደረጃ 4/7፦** እባክዎን የባለፈው ዓመት የትምህርት **ሪፖርት ካርድዎን** ጥራት ያለው ፎቶ ይላኩ፡`, { parse_mode: 'Markdown' });
   }
 
-  // 4. PHOTO UPLOADS
+  // 4. PHOTO UPLOADS & AVERAGE INPUT
   if (session.step === 'AWAITING_CARD_PHOTO' && msg.photo) {
     await safeEditMessage(chatId, msgId, '⏳ ሪፖርት ካርድ ወደ Storage በመጫን ላይ ነው...');
     
@@ -238,8 +247,21 @@ async function handleUserSteps(chatId, msg) {
     }
 
     session.card_photo_url = url;
+    session.step = 'AWAITING_AVERAGE';
+    return safeEditMessage(chatId, msgId, '✅ ሪፖርት ካርድ ተጫኗል!\n\n📊 **ደረጃ 5/7፦** እባክዎን የባለፈው ዓመት **አማካይ ውጤትዎን (Average)** በቁጥር ያስገቡ (ምሳሌ፦ 85.5)፦', { parse_mode: 'Markdown' });
+  }
+
+  // AVERAGE VALUE HANDLER
+  if (session.step === 'AWAITING_AVERAGE' && msg.text) {
+    const avgInput = parseFloat(msg.text.trim());
+
+    if (isNaN(avgInput) || avgInput < 0 || avgInput > 100) {
+      return safeEditMessage(chatId, msgId, '⚠️ እባክዎን ትክክለኛ የአማካይ ውጤት ቁጥር ያስገቡ (ከ 0 እስከ 100)፦');
+    }
+
+    session.average = avgInput;
     session.step = 'AWAITING_ID_PHOTO';
-    return safeEditMessage(chatId, msgId, '✅ ሪፖርት ካርድ ተጫኗል!\n\n📸 **ደረጃ 5/6፦** እባክዎን የ **ብሔራዊ መታወቂያዎን (National ID)** ፎቶ ይላኩ፡');
+    return safeEditMessage(chatId, msgId, `✅ አማካይ ውጤት (${avgInput}) ተመዝግቧል!\n\n📸 **ደረጃ 6/7፦** እባክዎን የ **ብሔራዊ መታወቂያዎን (National ID)** ፎቶ ይላኩ፡`, { parse_mode: 'Markdown' });
   }
 
   if (session.step === 'AWAITING_ID_PHOTO' && msg.photo) {
@@ -275,6 +297,7 @@ async function handleUserSteps(chatId, msg) {
       mother_phone: session.mother_phone,
       grade_level: session.grade,
       stream: session.stream || null,
+      average: session.average || null, // አዲሱ የተጨመረው Average
       card_photo_url: session.card_photo_url,
       faida_photo_url: session.faida_photo_url,
       receipt_photo_url: receiptUrl,
@@ -301,6 +324,7 @@ bot.on('callback_query', async (query) => {
   const session = userSessions[chatId];
   if (!session) return;
 
+  session.updatedAt = Date.now();
   bot.answerCallbackQuery(query.id);
   const msgId = session.mainMessageId;
 
@@ -320,14 +344,14 @@ bot.on('callback_query', async (query) => {
     } else {
       session.stream = null;
       session.step = 'AWAITING_FULL_NAME';
-      return safeEditMessage(chatId, msgId, `✅ ${grade}ኛ ክፍል ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { parse_mode: 'Markdown' });
+      return safeEditMessage(chatId, msgId, `✅ ${grade}ኛ ክፍል ተመርጧል።\n\n👤 **ደረጃ 3/7፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { parse_mode: 'Markdown' });
     }
   }
 
   if (data.startsWith('STREAM_')) {
     session.stream = data.replace('STREAM_', '');
     session.step = 'AWAITING_FULL_NAME';
-    return safeEditMessage(chatId, msgId, `✅ ዘርፍ፦ **${session.stream}** ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { parse_mode: 'Markdown' });
+    return safeEditMessage(chatId, msgId, `✅ ዘርፍ፦ **${session.stream}** ተመርጧል።\n\n👤 **ደረጃ 3/7፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { parse_mode: 'Markdown' });
   }
 
   if (data === 'EDIT_FAIDA') {
@@ -342,7 +366,7 @@ bot.on('callback_query', async (query) => {
 
   if (data === 'CONFIRM_GO_TO_PAYMENT') {
     session.step = 'AWAITING_PAYMENT_SCREENSHOT';
-    const paymentText = `💳 **የክፍያ መረጃ (ደረጃ 6/6)**\n\n` +
+    const paymentText = `💳 **የክፍያ መረጃ (ደረጃ 7/7)**\n\n` +
       `እባክዎን የምዝገባ ክፍያ **500 ብር** በሚከተለው የባንክ ሂሳብ ገቢ ያድርጉ፡\n` +
       `🏦 **ኢትዮጵያ ንግድ ባንክ:** 1000XXXXXXXXX\n` +
       `👤 **ስም:** ንጉስ ሁለተኛ ደረጃ ትምህርት ቤት\n\n` +
@@ -361,6 +385,7 @@ function showSummaryAndReviewScreen(chatId) {
     `👤 **ስም፦** ${session.full_name} ${session.father_name}\n` +
     `🆔 **ፋይዳ ቁጥር፦** ${session.faida_number}\n` +
     `📚 **ክፍል፦** ${session.grade}ኛ ${session.stream ? `(${session.stream})` : ''}\n` +
+    `📊 **አማካይ ውጤት (Average)፦** ${session.average || 'አልተሞላም'}\n` +
     `👩 **የእናት ስም፦** ${session.mother_name}\n` +
     `📞 **ስልክ፦** ${session.mother_phone}\n\n` +
     `እባክዎን መረጃዎቹ ትክክል መሆናቸውን ያረጋግጡ። ለማስተካከል የሚፈልጉት ካለ ከታች ያሉትን ቁልፎች ይጠቀሙ፦`;
@@ -381,9 +406,19 @@ function showSummaryAndReviewScreen(chatId) {
 
 // RESULT CHECKING INITIATION
 function handleViewResultStart(chatId) {
-  userSessions[chatId] = { step: 'AWAITING_RESULT_FAIDA' };
+  userSessions[chatId] = { step: 'AWAITING_RESULT_FAIDA', updatedAt: Date.now() };
   bot.sendMessage(chatId, '🔍 እባክዎን ለማረጋገጫ የ **ፋይዳ (Fayda FAN)** ቁጥርዎን ያስገቡ፡');
 }
+
+// Expired Session Cleaner (Memory Leak ለመከላከል)
+setInterval(() => {
+  const now = Date.now();
+  for (const chatId in userSessions) {
+    if (userSessions[chatId].updatedAt && (now - userSessions[chatId].updatedAt > 20 * 60 * 1000)) {
+      delete userSessions[chatId];
+    }
+  }
+}, 10 * 60 * 1000);
 
 // HTTP Server for Render Hosting
 const http = require('http');
