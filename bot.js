@@ -13,6 +13,15 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const userSessions = {};
 
+// Safe Edit Message Helper
+async function safeEditMessage(chatId, messageId, text, options = {}) {
+  try {
+    return await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, ...options });
+  } catch (err) {
+    console.error('Edit Message Error:', err.message);
+  }
+}
+
 // Helper: ፎቶዎችን ወደ Supabase Storage መጫኛ Function
 async function uploadTelegramPhotoToSupabase(fileId, pathName) {
   try {
@@ -26,8 +35,8 @@ async function uploadTelegramPhotoToSupabase(fileId, pathName) {
       .upload(fileName, buffer, { contentType: 'image/jpeg', upsert: true });
 
     if (error) {
-      console.error('Storage Upload Error:', error);
-      throw error;
+      console.error('Storage Upload Error:', error.message);
+      return null;
     }
 
     const { data: publicUrlData } = supabase.storage
@@ -103,7 +112,6 @@ async function handleUserSteps(chatId, msg) {
   const session = userSessions[chatId];
   if (!session || !session.step) return;
 
-  // Delete User Message to keep chat clean
   try { await bot.deleteMessage(chatId, msg.message_id); } catch(e){}
 
   const msgId = session.mainMessageId;
@@ -128,7 +136,6 @@ async function handleUserSteps(chatId, msg) {
       return bot.sendMessage(chatId, `ℹ️ የፋይዳ ቁጥር፦ ${inputFaida}\nየማመልከቻዎ ሁኔታ፦ **${student.status.toUpperCase()}**\n\nውጤት የሚለቀቀው ምዝገባዎ ሲጸድቅ ብቻ ነው።`);
     }
 
-    // Fetch grades
     const { data: results } = await supabase
       .from('results')
       .select('score, subjects(subject_name)')
@@ -168,17 +175,17 @@ async function handleUserSteps(chatId, msg) {
 
     if (hasApproved) {
       delete userSessions[chatId];
-      return bot.editMessageText('✅ ይህ የፋይዳ ቁጥር አስቀድሞ በስኬት ተመዝግቧል። ውጤት ለማየት የመነሻ ገጽን ይጠቀሙ።', { chat_id: chatId, message_id: msgId });
+      return safeEditMessage(chatId, msgId, '✅ ይህ የፋይዳ ቁጥር አስቀድሞ በስኬት ተመዝግቧል። ውጤት ለማየት የመነሻ ገጽን ይጠቀሙ።');
     }
 
     if (hasPending) {
       delete userSessions[chatId];
-      return bot.editMessageText('⏳ ይህ የፋይዳ ቁጥር አስቀድሞ ማመልከቻ ያስገባ ሲሆን በአሁኑ ወቅት በግምገማ (Pending) ላይ ይገኛል። እባክዎን አድሚኑ እስኪያጸድቀው ይታገሱ።', { chat_id: chatId, message_id: msgId });
+      return safeEditMessage(chatId, msgId, '⏳ ይህ የፋይዳ ቁጥር አስቀድሞ ማመልከቻ ያስገባ ሲሆን በአሁኑ ወቅት በግምገማ (Pending) ላይ ይገኛል። እባክዎን አድሚኑ እስኪያጸድቀው ይታገሱ።');
     }
 
     if (rejectedCount >= 3) {
       delete userSessions[chatId];
-      return bot.editMessageText('🛑 ይህ የፋይዳ ቁጥር 3 ጊዜ ማመልከቻ ያስገባ ሲሆን 3ቱም ተቀባይነት አላገኙም። በቦቱ መመዝገብ አይችሉም፤ እባክዎን በትምህርት ቤቱ በአካል በመገኘት ይመዝገቡ።', { chat_id: chatId, message_id: msgId });
+      return safeEditMessage(chatId, msgId, '🛑 ይህ የፋይዳ ቁጥር 3 ጊዜ ማመልከቻ ያስገባ ሲሆን 3ቱም ተቀባይነት አላገኙም። በቦቱ መመዝገብ አይችሉም፤ እባክዎን በትምህርት ቤቱ በአካል በመገኘት ይመዝገቡ።');
     }
 
     session.faida_number = inputFaida;
@@ -191,71 +198,74 @@ async function handleUserSteps(chatId, msg) {
       ]
     };
 
-    return bot.editMessageText(`✅ የፋይዳ ቁጥር (${inputFaida}) ተመዝግቧል።\n\n📚 **ደረጃ 2/6፦** እባክዎን መመዝገብ የሚፈልጉትን ክፍል ይምረጡ፡`, {
-      chat_id: chatId,
-      message_id: msgId,
-      reply_markup: gradeKeyboard
-    });
+    return safeEditMessage(chatId, msgId, `✅ የፋይዳ ቁጥር (${inputFaida}) ተመዝግቧል።\n\n📚 **ደረጃ 2/6፦** እባክዎን መመዝገብ የሚፈልጉትን ክፍል ይምረጡ፡`, { reply_markup: gradeKeyboard });
   }
 
   // 3. TEXT INPUTS
   if (session.step === 'AWAITING_FULL_NAME' && msg.text) {
     session.full_name = msg.text.trim();
     session.step = 'AWAITING_FATHER_NAME';
-    return bot.editMessageText(`👤 የተማሪ ስም፦ **${session.full_name}**\n\n👨 **የአባት ሙሉ ስም** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return safeEditMessage(chatId, msgId, `👤 የተማሪ ስም፦ **${session.full_name}**\n\n👨 **የአባት ሙሉ ስም** ያስገቡ፡`, { parse_mode: 'Markdown' });
   }
 
   if (session.step === 'AWAITING_FATHER_NAME' && msg.text) {
     session.father_name = msg.text.trim();
     session.step = 'AWAITING_MOTHER_NAME';
-    return bot.editMessageText(`👨 የአባት ስም፦ **${session.father_name}**\n\n👩 **የእናት ሙሉ ስም** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return safeEditMessage(chatId, msgId, `👨 የአባት ስም፦ **${session.father_name}**\n\n👩 **የእናት ሙሉ ስም** ያስገቡ፡`, { parse_mode: 'Markdown' });
   }
 
   if (session.step === 'AWAITING_MOTHER_NAME' && msg.text) {
     session.mother_name = msg.text.trim();
     session.step = 'AWAITING_MOTHER_PHONE';
-    return bot.editMessageText(`👩 የእናት ስም፦ **${session.mother_name}**\n\n📞 **የእናት የስልክ ቁጥር** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return safeEditMessage(chatId, msgId, `👩 የእናት ስም፦ **${session.mother_name}**\n\n📞 **የእናት የስልክ ቁጥር** ያስገቡ፡`, { parse_mode: 'Markdown' });
   }
 
   if (session.step === 'AWAITING_MOTHER_PHONE' && msg.text) {
     session.mother_phone = msg.text.trim();
     session.step = 'AWAITING_CARD_PHOTO';
-    return bot.editMessageText(`✅ የስልክ ቁጥር ተመዝግቧል።\n\n📸 **ደረጃ 4/6፦** እባክዎን የባለፈው ዓመት የትምህርት **ሪፖርት ካርድዎን** ጥራት ያለው ፎቶ ይላኩ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return safeEditMessage(chatId, msgId, `✅ የስልክ ቁጥር ተመዝግቧል።\n\n📸 **ደረጃ 4/6፦** እባክዎን የባለፈው ዓመት የትምህርት **ሪፖርት ካርድዎን** ጥራት ያለው ፎቶ ይላኩ፡`, { parse_mode: 'Markdown' });
   }
 
   // 4. PHOTO UPLOADS
   if (session.step === 'AWAITING_CARD_PHOTO' && msg.photo) {
-    await bot.editMessageText('🔍 ሰነዱ እየተፈተሸ ነው... እባክዎን ይቆዩ።', { chat_id: chatId, message_id: msgId });
+    await safeEditMessage(chatId, msgId, '⏳ ሪፖርት ካርድ ወደ Storage በመጫን ላይ ነው...');
     
     const fileId = msg.photo[msg.photo.length - 1].file_id;
-    await bot.editMessageText('⏳ ፎቶው ወደ Storage በመጫን ላይ ነው...', { chat_id: chatId, message_id: msgId });
-    
     const url = await uploadTelegramPhotoToSupabase(fileId, `card_${session.faida_number}`);
-    session.card_photo_url = url;
+    
+    if (!url) {
+      return safeEditMessage(chatId, msgId, '❌ ፎቶውን መጫን አልተቻለም። እባክዎን ፎቶውን ድጋሚ ይላኩ።');
+    }
 
+    session.card_photo_url = url;
     session.step = 'AWAITING_ID_PHOTO';
-    return bot.editMessageText('✅ ሪፖርት ካርድ ተጫኗል!\n\n📸 **ደረጃ 5/6፦** እባክዎን የ **ብሔራዊ መታወቂያዎን (National ID)** ፎቶ ይላኩ፡', { chat_id: chatId, message_id: msgId });
+    return safeEditMessage(chatId, msgId, '✅ ሪፖርት ካርድ ተጫኗል!\n\n📸 **ደረጃ 5/6፦** እባክዎን የ **ብሔራዊ መታወቂያዎን (National ID)** ፎቶ ይላኩ፡');
   }
 
   if (session.step === 'AWAITING_ID_PHOTO' && msg.photo) {
-    await bot.editMessageText('🔍 መታወቂያው እየተመረመረ ነው...', { chat_id: chatId, message_id: msgId });
+    await safeEditMessage(chatId, msgId, '⏳ መታወቂያው ወደ Storage በመጫን ላይ ነው...');
     
     const fileId = msg.photo[msg.photo.length - 1].file_id;
-    await bot.editMessageText('⏳ መታወቂያው ወደ Storage በመጫን ላይ ነው...', { chat_id: chatId, message_id: msgId });
-    
     const url = await uploadTelegramPhotoToSupabase(fileId, `faida_${session.faida_number}`);
-    session.faida_photo_url = url;
 
+    if (!url) {
+      return safeEditMessage(chatId, msgId, '❌ መታወቂያውን መጫን አልተቻለም። እባክዎን ፎቶውን ድጋሚ ይላኩ።');
+    }
+
+    session.faida_photo_url = url;
     return showSummaryAndReviewScreen(chatId);
   }
 
   if (session.step === 'AWAITING_PAYMENT_SCREENSHOT' && msg.photo) {
-    await bot.editMessageText('🔍 ደረሰኙ እየተረጋገጠ ነው...', { chat_id: chatId, message_id: msgId });
+    await safeEditMessage(chatId, msgId, '⏳ ደረሰኙ ወደ Storage በመጫን ላይ ነው...');
 
     const fileId = msg.photo[msg.photo.length - 1].file_id;
     const receiptUrl = await uploadTelegramPhotoToSupabase(fileId, `receipt_${session.faida_number}`);
 
-    // Insert to Supabase Database
+    if (!receiptUrl) {
+      return safeEditMessage(chatId, msgId, '❌ የክፍያ ደረሰኙን መጫን አልተቻለም። እባክዎን ደረሰኙን ድጋሚ ይላኩ።');
+    }
+
     const { error } = await supabase.from('students').insert([{
       telegram_id: msg.from.id,
       full_name: session.full_name,
@@ -273,11 +283,11 @@ async function handleUserSteps(chatId, msg) {
     }]);
 
     if (error) {
-      console.error('Database Insert Detailed Error:', error);
-      return bot.editMessageText('❌ መረጃውን ሲመዘገብ ስህተት አጋጥሟል። እባክዎን እንደገና ይሞክሩ።', { chat_id: chatId, message_id: msgId });
+      console.error('Database Insert Error:', error.message);
+      return safeEditMessage(chatId, msgId, `❌ መረጃውን ሲመዘገብ ስህተት አጋጥሟል፦ ${error.message}`);
     }
 
-    bot.editMessageText('🎉 **ምዝገባዎ በስኬት ተጠናቋል!**\n\nማመልከቻዎ በአድሚን ተገምግሞ ሲጸድቅ ማሳወቂያ ይደርስዎታል።', { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    safeEditMessage(chatId, msgId, '🎉 **ምዝገባዎ በስኬት ተጠናቋል!**\n\nማመልከቻዎ በአድሚን ተገምግሞ ሲጸድቅ ማሳወቂያ ይደርስዎታል።', { parse_mode: 'Markdown' });
     delete userSessions[chatId];
   }
 }
@@ -306,28 +316,28 @@ bot.on('callback_query', async (query) => {
           [{ text: '📖 Social Science', callback_data: 'STREAM_Social Science' }]
         ]
       };
-      return bot.editMessageText(`✅ ${grade}ኛ ክፍል ተመርጧል።\n\n🧭 እባክዎን የትምህርት ዘርፍ ይምረጡ፡`, { chat_id: chatId, message_id: msgId, reply_markup: streamKeyboard });
+      return safeEditMessage(chatId, msgId, `✅ ${grade}ኛ ክፍል ተመርጧል።\n\n🧭 እባክዎን የትምህርት ዘርፍ ይምረጡ፡`, { reply_markup: streamKeyboard });
     } else {
       session.stream = null;
       session.step = 'AWAITING_FULL_NAME';
-      return bot.editMessageText(`✅ ${grade}ኛ ክፍል ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+      return safeEditMessage(chatId, msgId, `✅ ${grade}ኛ ክፍል ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { parse_mode: 'Markdown' });
     }
   }
 
   if (data.startsWith('STREAM_')) {
     session.stream = data.replace('STREAM_', '');
     session.step = 'AWAITING_FULL_NAME';
-    return bot.editMessageText(`✅ ዘርፍ፦ **${session.stream}** ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return safeEditMessage(chatId, msgId, `✅ ዘርፍ፦ **${session.stream}** ተመርጧል።\n\n👤 **ደረጃ 3/6፦** የተማሪውን **ስም (የራሱን ብቻ)** ያስገቡ፡`, { parse_mode: 'Markdown' });
   }
 
   if (data === 'EDIT_FAIDA') {
     session.step = 'AWAITING_FAIDA_FIRST';
-    return bot.editMessageText('🆔 አዲስ **ፋይዳ ቁጥር** ያስገቡ፡', { chat_id: chatId, message_id: msgId });
+    return safeEditMessage(chatId, msgId, '🆔 አዲስ **ፋይዳ ቁጥር** ያስገቡ፡');
   }
 
   if (data === 'EDIT_NAME') {
     session.step = 'AWAITING_FULL_NAME';
-    return bot.editMessageText('👤 አዲስ **የተማሪ ስም** ያስገቡ፡', { chat_id: chatId, message_id: msgId });
+    return safeEditMessage(chatId, msgId, '👤 አዲስ **የተማሪ ስም** ያስገቡ፡');
   }
 
   if (data === 'CONFIRM_GO_TO_PAYMENT') {
@@ -338,7 +348,7 @@ bot.on('callback_query', async (query) => {
       `👤 **ስም:** ንጉስ ሁለተኛ ደረጃ ትምህርት ቤት\n\n` +
       `📸 ክፍያውን ፈጽመው ደረሰኙን (ስክሪንሹት) ይላኩ።`;
 
-    return bot.editMessageText(paymentText, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+    return safeEditMessage(chatId, msgId, paymentText, { parse_mode: 'Markdown' });
   }
 });
 
@@ -363,9 +373,7 @@ function showSummaryAndReviewScreen(chatId) {
     ]
   };
 
-  return bot.editMessageText(summaryText, {
-    chat_id: chatId,
-    message_id: session.mainMessageId,
+  return safeEditMessage(chatId, session.mainMessageId, summaryText, {
     reply_markup: reviewButtons,
     parse_mode: 'Markdown'
   });
