@@ -423,3 +423,13 @@ setInterval(() => {
 // HTTP Server for Render Hosting
 const http = require('http');
 http.createServer((req, res) => res.end('School Registration Bot Running!')).listen(process.env.PORT || 3000);
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception thrown:', err);
+});
+
+
